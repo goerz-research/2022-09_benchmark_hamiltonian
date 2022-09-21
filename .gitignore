@@ -1,0 +1,4 @@
+/*.ipynb
+*.jld2
+.ipynb_checkpoints
+Manifest.toml
