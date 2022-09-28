@@ -155,6 +155,47 @@ function as_table(data)
     )
 end
 
+# ## Linear Algebra Benchmarks
+
+# +
+function benchmark_mv_vs_mpm()
+
+    N = 1000
+    H = random_hermitian_matrix(N)
+    H0 = random_hermitian_matrix(N)
+    Ψ = random_state_vector(N)
+    ϕ = random_state_vector(N)
+    val = 1.15
+
+    println("*** matrix-vector product ϕ = H Ψ")
+    b_mv1 = @benchmark mul!($ϕ, $H, $Ψ)
+    display(b_mv1)
+
+    println("*** matrix-vector product ϕ += v H Ψ")
+    b_mv2 = @benchmark mul!($ϕ, $H, $Ψ, $val, true)
+    display(b_mv2)
+
+    println("*** matrix-vector product ϕ += H Ψ")
+    b_mv3 = @benchmark mul!($ϕ, $H, $Ψ, true, true)
+    display(b_mv3)
+
+    println("*** matrix-matrix addition H += v H0")
+    b_mpm1 = @benchmark axpy!($val, $H0, $H)
+    display(b_mpm1)
+
+    println("*** matrix-matrix addition H += H0")
+    b_mpm2 = @benchmark axpy!(true, $H0, $H)
+    display(b_mpm2)
+
+    println("*** matrix-copy H = H0")
+    b_mpm3 = @benchmark copyto!($H, $H0)
+    display(b_mpm3)
+
+end
+# -
+
+benchmark_mv_vs_mpm()
+
 # ## Dense Matrices
 
 # ### 2 Pulses
