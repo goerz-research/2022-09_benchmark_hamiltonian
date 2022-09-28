@@ -38,7 +38,9 @@ using BenchmarkTools
 using LinearAlgebra
 using Statistics
 using Plots
+using Term
 using Test
+using Printf
 
 plotlyjs()
 
@@ -140,6 +142,19 @@ function average_times(benchmark)
     return mean(filtered_times), std(filtered_times)
 end
 
+
+function as_table(data)
+    Term.Tables.Table(
+        hcat(
+            [@sprintf("%d", N) for N in data["N_Hilbert_vals"]],
+            [@sprintf("%.2e", v / 1e6) for v in data["runtime_greedy"]],
+            [@sprintf("%.2e", v / 1e6) for v in data["runtime_lazy"]],
+        ),
+        header=["N", "greedy (ms)", "lazy (ms)"],
+        columns_justify=:right
+    )
+end
+
 # ## Dense Matrices
 
 # ### 2 Pulses
@@ -156,7 +171,11 @@ function benchmark_series(; force=false)
         N_Hilbert_vals =
             [5, 10, 20, 40, 60, 80, 100, 200, 400, 600, 800, 1000, 2000, 4000]
         for N_Hilbert in N_Hilbert_vals
-            b_greedy, b_lazy = run_benchmarks(N -> random_hermitian_matrix(N, 1.0); N_Hilbert, N_pulses)
+            b_greedy, b_lazy = run_benchmarks(
+                N -> random_hermitian_matrix(N, 1.0);
+                N_Hilbert,
+                N_pulses
+            )
             t̄1, σ1 = average_times(b_greedy)
             push!(runtime_greedy, t̄1)
             push!(std_greedy, σ1)
@@ -164,13 +183,7 @@ function benchmark_series(; force=false)
             push!(runtime_lazy, t̄2)
             push!(std_lazy, σ2)
         end
-        @strdict(
-            N_Hilbert_vals,
-            runtime_greedy,
-            std_greedy,
-            runtime_lazy,
-            std_lazy
-        )
+        @strdict(N_Hilbert_vals, runtime_greedy, std_greedy, runtime_lazy, std_lazy)
     end
 
     fig = plot(
@@ -188,7 +201,11 @@ function benchmark_series(; force=false)
         label="lazy",
         marker=true
     )
-    plot!(fig; legend=:top, xlabel="Hilbert space dimension", ylabel="runtime (ms)")
+    if !isnothing(match(r"^In\[[0-9]*\]$", @__FILE__))  # notebook
+        display(plot!(fig; legend=:top, xlabel="Hilbert space dimension", ylabel="runtime (ms)"))
+    end
+    display(as_table(data))
+    return data
 end
 
-benchmark_series(; force=true)
+benchmark_series(; force=false);
