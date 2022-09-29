@@ -155,6 +155,88 @@ function as_table(data)
     )
 end
 
+# ## Workflow
+
+# +
+function run_or_load(
+    f::Function,
+    filename::String;
+    suffix="jld2",
+    tag::Bool=DrWatson.readenv("DRWATSON_TAG", DrWatson.istaggable(suffix)),
+    gitpath=DrWatson.projectdir(),
+    loadfile=true,
+    storepatch::Bool=DrWatson.readenv("DRWATSON_STOREPATCH", false),
+    force=false,
+    verbose=true,
+    wsave_kwargs=Dict()
+)
+    (suffix |> startswith(".")) && (suffix = suffix[2:end])
+    if ".$suffix" ≠ splitext(filename)[2]
+        @warn "$filename suffix is not $suffix. Appending file extension"
+        filename = "$filename.$suffix"
+    end
+    data, file = DrWatson.produce_or_load(
+        _ -> f(),
+        "",
+        Dict();
+        filename,
+        suffix,
+        tag,
+        gitpath,
+        loadfile,
+        storepatch,
+        force,
+        verbose,
+        wsave_kwargs
+    )
+    return data
+end
+
+
+macro run_or_load(exs...)
+    exs = Any[exs...]
+    # any keyword arguments after a ";" are pushed into either the first or
+    # second element of exs (depending on wether or not we use the `do` syntax
+    # to pass `f`). We need to move them back to the end
+    i = findfirst([(ex isa Expr && ex.head == :parameters) for ex in exs])
+    if !isnothing(i)
+        extra_kw_def = exs[i].args
+        for ex in extra_kw_def
+            push!(exs, ex isa Symbol ? Expr(:kw, ex, ex) : ex)
+        end
+        deleteat!(exs, i)
+    end
+    _isa_kw = arg -> (arg isa Expr && arg.head == :kw)
+    if (length(exs) < 2) || _isa_kw(exs[1]) || _isa_kw(exs[2])
+        @show exs
+        error("@run_or_load macro must receive a function and filename as the first two positional arguments")
+    end
+    if (length(exs) > 2) && !_isa_kw(exs[3])
+        @show exs
+        error("@run_or_load macro only takes two positional arguments (function to run and filename)")
+    end
+    f = popfirst!(exs)
+    filename = popfirst!(exs)
+    # Save the source file name and line number of the calling line.
+    s = QuoteNode(__source__)
+    # Wrap the function f, such that the source can be saved in the data Dict.
+    return quote
+        run_or_load($(esc(filename)), $(esc.(exs)...)) do
+            data = $(esc(f))()
+            # Extract the `gitpath` kw arg if it's there
+            kws = ((; kwargs...) -> Dict(kwargs...))(
+                $(esc.(exs)...)
+            )
+            gitpath = get(kws, :gitpath, DrWatson.projectdir())
+            # Include the script tag with checking for the type of dict keys, etc.
+            data = DrWatson.scripttag!(data, $s; gitpath=gitpath)
+            return data
+        end
+    end
+end
+
+# -
+
 # ## Linear Algebra Benchmarks
 
 # +
@@ -202,8 +284,7 @@ benchmark_mv_vs_mpm()
 
 function benchmark_series(; force=false)
 
-    filename = "benchmarks_dense_2pulses.jld2"
-    data, file = @produce_or_load(Dict(); filename, force) do _
+    data = @run_or_load("benchmarks_dense_2pulses.jld2"; force) do
         N_pulses = 2
         runtime_greedy = Float64[]
         std_greedy = Float64[]
@@ -243,7 +324,14 @@ function benchmark_series(; force=false)
         marker=true
     )
     if !isnothing(match(r"^In\[[0-9]*\]$", @__FILE__))  # notebook
-        display(plot!(fig; legend=:top, xlabel="Hilbert space dimension", ylabel="runtime (ms)"))
+        display(
+            plot!(
+                fig;
+                legend=:top,
+                xlabel="Hilbert space dimension",
+                ylabel="runtime (ms)"
+            )
+        )
     end
     display(as_table(data))
     return data
