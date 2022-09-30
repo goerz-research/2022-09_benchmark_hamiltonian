@@ -192,12 +192,41 @@ function run_or_load(
     return data
 end
 
+@doc raw"""
+Given a list of macro arguments, push all keyword parameters to the end.
 
-macro run_or_load(exs...)
+A macro will receive keyword arguments after ";" as either the first or second
+argument (depending on whether the macro is invoked together with `do`). The
+`reorder_macro_kw_params` function reorders the arguments to put the keyword
+arguments at the end or the argument list, as if they had been separated from
+the positional arguments by a comma instead of a semicolon.
+
+# Example
+
+With
+
+```
+macro mymacro(exs...)
+    @show exs
+    exs = reorder_macro_kw_params(exs)
+    @show exs
+end
+```
+
+the `exs` in e.g. `@mymacro(1, 2; a=3, b)` will end up as
+
+```
+(1, 2, :($(Expr(:kw, :a, 3))), :($(Expr(:kw, :b, :b))))
+```
+
+instead of the original
+
+```
+(:($(Expr(:parameters, :($(Expr(:kw, :a, 3))), :b))), 1, 2)
+```
+"""
+function reorder_macro_kw_params(exs)
     exs = Any[exs...]
-    # any keyword arguments after a ";" are pushed into either the first or
-    # second element of exs (depending on wether or not we use the `do` syntax
-    # to pass `f`). We need to move them back to the end
     i = findfirst([(ex isa Expr && ex.head == :parameters) for ex in exs])
     if !isnothing(i)
         extra_kw_def = exs[i].args
@@ -206,6 +235,13 @@ macro run_or_load(exs...)
         end
         deleteat!(exs, i)
     end
+    return Tuple(exs)
+end
+
+
+macro run_or_load(exs...)
+    exs = reorder_macro_kw_params(exs)
+    exs = Any[exs...]
     _isa_kw = arg -> (arg isa Expr && arg.head == :kw)
     if (length(exs) < 2) || _isa_kw(exs[1]) || _isa_kw(exs[2])
         @show exs
