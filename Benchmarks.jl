@@ -109,22 +109,33 @@ function make_apply_generator_lazy(state::ST, generator::GT) where {ST,GT}
     end
 end
 
-function run_benchmarks(make_operator; N_Hilbert=10, N_pulses=2)
+function measure_apply_generator(make_operator; N_Hilbert=10, N_pulses=2, show_benchmarks=false, evals=10, samples=1000)
     Ψ, generator, vals_dict = init_system(make_operator; N_Hilbert, N_pulses)
     apply_generator_greedy = make_apply_generator_greedy(Ψ, generator)
     apply_generator_lazy = make_apply_generator_lazy(Ψ, generator)
     ϕ1 = apply_generator_greedy(Ψ, generator, vals_dict)
     ϕ2 = apply_generator_lazy(Ψ, generator, vals_dict)
     @test norm(ϕ1 - ϕ2) < 1e-14
-    b_greedy = @benchmarkable $apply_generator_greedy($Ψ, $generator, $vals_dict)
-    b_lazy = @benchmarkable $apply_generator_lazy($Ψ, $generator, $vals_dict)
-    tune!(b_greedy; seconds=5, evals=10)
-    tune!(b_lazy; seconds=5, evals=10)
-    evals = max(b_greedy.params.evals, b_lazy.params.evals, 10)
-    samples = max(b_greedy.params.samples, b_lazy.params.samples, 1000)
+    bm_greedy = @benchmarkable $apply_generator_greedy($Ψ, $generator, $vals_dict)
+    bm_lazy = @benchmarkable $apply_generator_lazy($Ψ, $generator, $vals_dict)
+    #tune!(bm_greedy; seconds=5, evals=10)
+    #tune!(bm_lazy; seconds=5, evals=10)
+    #evals = max(bm_greedy.params.evals, bm_lazy.params.evals, 10)
+    #samples = max(bm_greedy.params.samples, bm_lazy.params.samples, 1000)
     # @show evals # TODO
     # @show samples
-    return run(b_greedy; evals, samples), run(b_lazy; evals, samples)
+    b_greedy = run(bm_greedy; evals, samples)
+    if show_benchmarks
+        println("\n\n** N = $N_Hilbert\n")
+        println("*** greedy")
+        display(b_greedy)
+    end
+    b_lazy = run(bm_lazy; evals, samples)
+    if show_benchmarks
+        println("*** lazy")
+        display(b_lazy)
+    end
+    return b_greedy, b_lazy
 end
 
 """Get the average runtime for the benchmark in ns, excluding outliers.
@@ -146,7 +157,7 @@ end
 function as_table(data)
     Term.Tables.Table(
         hcat(
-            [@sprintf("%d", N) for N in data["N_Hilbert_vals"]],
+            [@sprintf("%d", N) for N in data["N"]],
             [@sprintf("%.2e", v / 1e6) for v in data["runtime_greedy"]],
             [@sprintf("%.2e", v / 1e6) for v in data["runtime_lazy"]],
         ),
@@ -242,7 +253,7 @@ end
 macro run_or_load(exs...)
     exs = reorder_macro_kw_params(exs)
     exs = Any[exs...]
-    _isa_kw = arg -> (arg isa Expr && arg.head == :kw)
+    _isa_kw = arg -> (arg isa Expr && (arg.head == :kw || arg.head == :(=)))
     if (length(exs) < 2) || _isa_kw(exs[1]) || _isa_kw(exs[2])
         @show exs
         error("@run_or_load macro must receive a function and filename as the first two positional arguments")
@@ -318,21 +329,19 @@ benchmark_mv_vs_mpm()
 
 # ### 2 Pulses
 
-function benchmark_series(; force=false)
+function benchmark_apply_generator(N_values; make_operator, title, outfile, N_pulses=2, show_plot=false, show_table=true, show_benchmarks=false, force=false)
 
-    data = @run_or_load("benchmarks_dense_2pulses.jld2"; force) do
-        N_pulses = 2
+    data = @run_or_load(outfile; force) do
         runtime_greedy = Float64[]
         std_greedy = Float64[]
         runtime_lazy = Float64[]
         std_lazy = Float64[]
-        N_Hilbert_vals =
-            [5, 10, 20, 40, 60, 80, 100, 200, 400, 600, 800, 1000, 2000, 4000]
-        for N_Hilbert in N_Hilbert_vals
-            b_greedy, b_lazy = run_benchmarks(
-                N -> random_hermitian_matrix(N, 1.0);
+        for N_Hilbert in N_values
+            b_greedy, b_lazy = measure_apply_generator(
+                make_operator;
                 N_Hilbert,
-                N_pulses
+                N_pulses,
+                show_benchmarks
             )
             t̄1, σ1 = average_times(b_greedy)
             push!(runtime_greedy, t̄1)
@@ -341,36 +350,60 @@ function benchmark_series(; force=false)
             push!(runtime_lazy, t̄2)
             push!(std_lazy, σ2)
         end
-        @strdict(N_Hilbert_vals, runtime_greedy, std_greedy, runtime_lazy, std_lazy)
+        @strdict(N=N_values, runtime_greedy, std_greedy, runtime_lazy, std_lazy)
     end
 
-    fig = plot(
-        data["N_Hilbert_vals"],
-        data["runtime_greedy"] .* 1e-6,
-        yerr=data["std_greedy"] .* 1e-6,
-        label="greedy",
-        marker=true
-    )
-    plot!(
-        fig,
-        data["N_Hilbert_vals"],
-        data["runtime_lazy"] .* 1e-6,
-        yerr=data["std_lazy"] .* 1e-6,
-        label="lazy",
-        marker=true
-    )
-    if !isnothing(match(r"^In\[[0-9]*\]$", @__FILE__))  # notebook
+    if show_plot
+        fig = plot(
+            data["N"],
+            data["runtime_greedy"] .* 1e-6,
+            yerr=data["std_greedy"] .* 1e-6,
+            label="greedy",
+            marker=true
+        )
+        plot!(
+            fig,
+            data["N"],
+            data["runtime_lazy"] .* 1e-6,
+            yerr=data["std_lazy"] .* 1e-6,
+            label="lazy",
+            marker=true
+        )
         display(
             plot!(
                 fig;
-                legend=:top,
-                xlabel="Hilbert space dimension",
-                ylabel="runtime (ms)"
+                legend=:left,
+                xlabel="Hilbert space dimension N",
+                ylabel="runtime (ms)",
+                title=title,
             )
         )
     end
-    display(as_table(data))
+    if show_table
+        println("** $title")
+        display(as_table(data))
+    end
     return data
 end
 
-benchmark_series(; force=false);
+IN_NOTEBOOK = !isnothing(match(r"^In\[[0-9]*\]$", @__FILE__))
+
+benchmark_apply_generator(
+    [5, 10, 20, 40, 60, 80, 100, 200, 400, 600, 800, 1000, 2000, 4000];
+    title="apply_generator, 2 pulses, dense matrices",
+    outfile="apply_generator_dense_2pulses.jld2",
+    make_operator=random_hermitian_matrix,
+    show_plot=IN_NOTEBOOK,
+    show_benchmarks=true,
+    force=false,
+);
+
+benchmark_apply_generator(
+    [5, 10, 20, 40, 60, 80, 100, 200, 400, 600, 800, 1000];
+    title="apply_generator, 2 pulses, sparse matrices (0.5)",
+    outfile="apply_generator_sparse0.5_2pulses.jld2",
+    make_operator=N -> random_hermitian_sparse_matrix(N, sparsity=0.5),
+    show_plot=IN_NOTEBOOK,
+    show_benchmarks=true,
+    force=false,
+);
